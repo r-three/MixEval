@@ -58,6 +58,12 @@ def parse_args():
         help="Path to local judge llm model, if set, local judge model is used and not only api."
         )
     parser.add_argument(
+        "--batch_size", 
+        type=int, 
+        required=True, 
+        help="Batch size for local judge model."
+        )
+    parser.add_argument(
         "--model_response_dir", 
         type=str, 
         default="mix_eval/data/model_responses/", 
