@@ -82,10 +82,24 @@ def parse_args():
         help="Batch size for evaluation."
         )
     parser.add_argument(
+        "--batch_size_judge", 
+        type=int, 
+        default=1, 
+        help="Batch size for judge model."
+        )
+    parser.add_argument(
         "--max_gpu_memory", 
         type=str, 
         default=None, 
         help="The maximum memory per GPU for storing model weights. "
+        "Set this properly will allocate more memory for activations, "
+        "so you can use longer context lengths or larger batch sizes."
+        )
+    parser.add_argument(
+        "--max_gpu_memory_judge", 
+        type=str, 
+        default=None, 
+        help="The maximum memory per GPU for storing judge weights. "
         "Set this properly will allocate more memory for activations, "
         "so you can use longer context lengths or larger batch sizes."
         )
