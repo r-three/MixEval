@@ -176,6 +176,11 @@ def parse_args():
         "This will save budge for those models that has been judged before."
         "it also helps to do some analysis easily without running judgements again."
         )
+    parser.add_argument(
+        "--use_vllm",
+        action="store_true",
+        help="Use VLLM for serving local judge models."
+        )
     return parser.parse_args()
 
 

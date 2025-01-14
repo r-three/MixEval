@@ -10,6 +10,8 @@ from openai import OpenAI, AzureOpenAI
 from openai._exceptions import RateLimitError, BadRequestError
 from httpx import Timeout
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from vllm import LLM, SamplingParams
+
 from mix_eval.prompts.judge_prompts import gpt_judge_for_closeended_multiplechoice
 from mix_eval.utils.common_utils import extract_basemodel_response_2e
 from mix_eval.utils.common_utils import get_gpu_memory
@@ -199,6 +201,7 @@ class OSJudgeCloseendMultichoice:
         model = AutoModelForCausalLM.from_pretrained(
             self.JUDGE,
             trust_remote_code=self.trust_remote_code,
+            torch_dtype=torch.float16,
             **kwargs
         ).eval()
         return model
@@ -312,4 +315,133 @@ class OSJudgeCloseendMultichoice:
         # for result in results:
         #     if result['judge_response'] is None:
         #         raise ValueError("Some entries are not annotated due to errors in annotate_p, please inspect and retry.")
+        return results
+
+
+######################## VLLM ########################
+class VLLMJudgeCloseendMultichoice:
+    def __init__(self, args):
+        """
+        Initialize the VLLMJudgeCloseendMultichoice class.
+        
+        Args:
+            args: Argument parser object containing necessary parameters.
+        """
+        self.args = args
+        self.JUDGE = args.multichoice_judge
+        self.MAX_NEW_TOKENS = 1024
+        self.BATCH_SIZE = args.batch_size_judge  # Batch size for efficient inference
+
+        # Initialize vLLM
+        self.llm = self.build_model()
+
+    def build_model(self):
+        """
+        Initialize the vLLM model with the specified judge model.
+        """
+        return LLM(model=self.JUDGE, tokenizer_mode="auto", enable_prefix_caching=True, tensor_parallel_size=4)
+
+    def format_prompts(self, inputs):
+        """
+        Format the inputs into a prompt suitable for the model.
+
+        Args:
+            inputs: Tuple containing the prompt, options, and response.
+
+        Returns:
+            str: Formatted prompt.
+        """
+        prompt, options, response = inputs
+        option_letters = [chr(ord("A") + i) for i in range(len(options))]
+        options_str = "\n".join([f"{option_letter}. {option}" for option_letter, option in zip(option_letters, options)])
+        formatted_prompt = gpt_judge_for_closeended_multiplechoice(prompt, options_str, response)
+        return formatted_prompt
+
+    def batch_GPT_decode(self, batch_inputs):
+        """
+        Perform batch decoding using vLLM.
+
+        Args:
+            batch_inputs: List of formatted prompts.
+
+        Returns:
+            List[str]: List of decoded completions.
+        """
+        # Prepare formatted prompts
+        prompt_texts = [self.format_prompts(inputs) for inputs in batch_inputs]
+
+        # Define sampling parameters
+        sampling_params = SamplingParams(
+            max_tokens=self.MAX_NEW_TOKENS,
+            temperature=0.7,
+            top_p=0.9,
+            stop=["</s>"]  # Ensure clean stopping
+        )
+
+        # Run batch inference with vLLM
+        results = self.llm.chat(prompt_texts, sampling_params, use_tqdm=False)
+        completions = [result.outputs[0].text for result in results]
+        return completions
+
+    def annotate_p(self, task):
+        """
+        Prepare a single task for annotation.
+
+        Args:
+            task: Dictionary containing the task details.
+
+        Returns:
+            Tuple: Formatted inputs for the model.
+        """
+        prompt = task['prompt']
+        options = task['options']
+        response = task['response']
+
+        if hasattr(self.args, 'model_type') and self.args.model_type == 'BaseModel':
+            response = extract_basemodel_response_2e(response)
+            task['response_extracted'] = response
+
+        if not isinstance(options, list):
+            print(f"Invalid options: {options}")
+            return None
+
+        return (prompt, options, response)
+
+    def annotate_parallel(self, tasks):
+        """
+        Annotate tasks in parallel using batch processing.
+
+        Args:
+            tasks: List of tasks to be annotated.
+
+        Returns:
+            List[dict]: List of annotated tasks.
+        """
+        print(f"Parsing in parallel with batch size {self.BATCH_SIZE}.")
+        results = []
+        batch_inputs = []
+        batch_tasks = []
+
+        for task in tqdm(tasks):
+            inputs = self.annotate_p(task)
+            if inputs is not None:
+                batch_inputs.append(inputs)
+                batch_tasks.append(task)
+
+            # Process batch when it reaches the batch size
+            if len(batch_inputs) == self.BATCH_SIZE:
+                completions = self.batch_GPT_decode(batch_inputs)
+                for task, completion in zip(batch_tasks, completions):
+                    task['judge_response'] = completion
+                    results.append(task)
+                batch_inputs = []
+                batch_tasks = []
+
+        # Process remaining tasks in the last batch
+        if batch_inputs:
+            completions = self.batch_GPT_decode(batch_inputs)
+            for task, completion in zip(batch_tasks, completions):
+                task['judge_response'] = completion
+                results.append(task)
+
         return results

@@ -3,16 +3,19 @@ import random
 random.seed(42)
 import numpy as np
 import ast
+import multiprocessing as mp
 
 from mix_eval.utils.judge_freeform_parser import (
     ChatGPTJudgeCloseendFreeform, 
     OSJudgeCloseendFreeform,
+    VLLMJudgeCloseendFreeform,
     ClaudeJudgeCloseendFreeform, 
     GeminiJudgeCloseendFreeform
     )
 from mix_eval.utils.judge_multichoice_parser import (
     ChatGPTJudgeCloseendMultichoice,
     OSJudgeCloseendMultichoice,
+    VLLMJudgeCloseendMultichoice,
     ClaudeJudgeCloseendMultichoice,
     GeminiJudgeCloseendMultichoice
     )
@@ -111,48 +114,61 @@ def get_option_from_judge(judge_response):
 def is_option(variable):
     return isinstance(variable, str) and len(variable) == 1 and variable.isupper()
 
-def parse_multi_choice_response_model(args, tasks):
-    tasks_remained = tasks
-    tasks_judged = []
-    if args.judge_model_id:
-        model_judge = OSJudgeCloseendMultichoice(args)
-    else:
-        model_judge = ChatGPTJudgeCloseendMultichoice(args)
-    
-    MAX_RETRY_NUM = 10
-    for _ in range(MAX_RETRY_NUM):
-        tasks_judged_p = model_judge.annotate_parallel(tasks_remained)
-        # retry those failed cases whose "judge_response" is None or no valid score found inside
-        tasks_remained = []
-        for task in tasks_judged_p:
-            if task['judge_response'] is not None and is_option(get_option_from_judge(task['judge_response'])):
-                task['judge_option'] = get_option_from_judge(task['judge_response'])
-                tasks_judged.append(task)
+def parse_multi_choice_response_model(args, tasks, queue=None):
+    try:
+        tasks_remained = tasks
+        tasks_judged = []
+        if args.judge_model_id:
+            if args.use_vllm:
+                model_judge = VLLMJudgeCloseendMultichoice(args)
             else:
-                tasks_remained.append(task)
-
-        if len(tasks_remained) == 0:
-            break
+                model_judge = OSJudgeCloseendMultichoice(args)
         else:
-            print(f"Still {len(tasks_remained)} tasks remained to be judged. Retry...")
-            
-    if len(tasks_remained) > 0:
-        print(f"Max retry number {MAX_RETRY_NUM} reached, while some tasks are still not judged. "
-              "Randomly assign the options for them.\n"
-              "This is expected during parsing. "
-              "The main cause may be that the evaluated model's response does not contain a valid answer.")
-        # randomly assign the option for each entry
-        for task in tasks_remained:
-            options = task['options']
-            option_letters = [chr(ord("A") + i) for i in range(len(options))]
-            task['judge_option'] = random.choice(option_letters)
-            tasks_judged.append(task)
-            
-    assert len(tasks_judged) == len(tasks), \
-        "The number of tasks judged is not equal to the number of input tasks."
-    
-    return tasks_judged
+            model_judge = ChatGPTJudgeCloseendMultichoice(args)
+        
+        MAX_RETRY_NUM = 10
+        for _ in range(MAX_RETRY_NUM):
+            tasks_judged_p = model_judge.annotate_parallel(tasks_remained)
+            # retry those failed cases whose "judge_response" is None or no valid score found inside
+            tasks_remained = []
+            for task in tasks_judged_p:
+                if task['judge_response'] is not None and is_option(get_option_from_judge(task['judge_response'])):
+                    task['judge_option'] = get_option_from_judge(task['judge_response'])
+                    tasks_judged.append(task)
+                else:
+                    tasks_remained.append(task)
 
+            if len(tasks_remained) == 0:
+                break
+            else:
+                print(f"Still {len(tasks_remained)} tasks remained to be judged. Retry...")
+                
+        if len(tasks_remained) > 0:
+            print(f"Max retry number {MAX_RETRY_NUM} reached, while some tasks are still not judged. "
+                "Randomly assign the options for them.\n"
+                "This is expected during parsing. "
+                "The main cause may be that the evaluated model's response does not contain a valid answer.")
+            # randomly assign the option for each entry
+            for task in tasks_remained:
+                options = task['options']
+                option_letters = [chr(ord("A") + i) for i in range(len(options))]
+                task['judge_option'] = random.choice(option_letters)
+                tasks_judged.append(task)
+                
+        assert len(tasks_judged) == len(tasks), \
+            "The number of tasks judged is not equal to the number of input tasks."
+        
+        if args.use_vllm:
+            queue.put(('success', tasks_judged))
+        else:
+            return tasks_judged
+    except Exception as e:
+        if args.use_vllm:
+            queue.put(('error', str(e)))
+        else:
+            raise e
+
+    
 def check_is_number(string):
     """
     Check if the given string a number.
@@ -289,47 +305,63 @@ def get_score_from_judge(judge_response):
         
     return float(rating)
 
-def parse_freeform_response_model(args, tasks):
-    tasks_remained = tasks
-    tasks_judged = []
-    if args.judge_model_id:
-        model_judge = OSJudgeCloseendFreeform(args)
-    else:
-        model_judge = ChatGPTJudgeCloseendFreeform(args)
-    
-    MAX_RETRY_NUM = 10
-    for _ in range(MAX_RETRY_NUM):
-        tasks_judged_p = model_judge.annotate_parallel(tasks_remained)
-        # retry those failed cases whose "judge_response" is None or no valid score found inside
-        tasks_remained = []
-        for task in tasks_judged_p:
-            if (task['judge_response'] is not None 
-                and 0 <= get_score_from_judge(task['judge_response']) <= 1):
-                task['judge_score'] = get_score_from_judge(task['judge_response'])
-                tasks_judged.append(task)
+def parse_freeform_response_model(args, tasks, queue=None):
+    try:
+        tasks_remained = tasks
+        tasks_judged = []
+        if args.judge_model_id:
+            if args.use_vllm:
+                model_judge = VLLMJudgeCloseendFreeform(args)
             else:
-                tasks_remained.append(task)
-
-        if len(tasks_remained) == 0:
-            break
+                model_judge = OSJudgeCloseendFreeform(args)
         else:
-            print(f"Still {len(tasks_remained)} tasks remained to be judged. Retry...")
-            
-    if len(tasks_remained) > 0:
-        print(f"Max retry number {MAX_RETRY_NUM} reached, "
-              "while some tasks are still not judged. "
-              "Randomly assign the scores for them.\n"
-              "This is expected during parsing. "
-              "The main cause may be that the evaluated model's response does not contain a valid answer.")
-        # randomly assign the score for each entry
-        for task in tasks_remained:
-            task['judge_score'] = round(random.random(), 1)
-            tasks_judged.append(task)
-    
-    assert len(tasks_judged) == len(tasks), \
-        "The number of tasks judged is not equal to the number of input tasks."
-    
-    return tasks_judged
+            model_judge = ChatGPTJudgeCloseendFreeform(args)
+        
+        MAX_RETRY_NUM = 10
+        for _ in range(MAX_RETRY_NUM):
+            tasks_judged_p = model_judge.annotate_parallel(tasks_remained)
+            # retry those failed cases whose "judge_response" is None or no valid score found inside
+            tasks_remained = []
+            for task in tasks_judged_p:
+                if (task['judge_response'] is not None 
+                    and 0 <= get_score_from_judge(task['judge_response']) <= 1):
+                    task['judge_score'] = get_score_from_judge(task['judge_response'])
+                    tasks_judged.append(task)
+                else:
+                    tasks_remained.append(task)
+
+            if len(tasks_remained) == 0:
+                break
+            else:
+                print(f"Still {len(tasks_remained)} tasks remained to be judged. Retry...")
+                
+        if len(tasks_remained) > 0:
+            print(f"Max retry number {MAX_RETRY_NUM} reached, "
+                "while some tasks are still not judged. "
+                "Randomly assign the scores for them.\n"
+                "This is expected during parsing. "
+                "The main cause may be that the evaluated model's response does not contain a valid answer.")
+            # randomly assign the score for each entry
+            for task in tasks_remained:
+                task['judge_score'] = round(random.random(), 1)
+                tasks_judged.append(task)
+        
+        assert len(tasks_judged) == len(tasks), \
+            "The number of tasks judged is not equal to the number of input tasks."
+        
+        print(f"Scuccessfully judged {len(tasks_judged)} tasks.")
+
+        if args.use_vllm:
+            queue.put(('success', tasks_judged))
+        else:
+            return tasks_judged
+
+    except Exception as e:
+        raise e
+        if args.use_vllm:
+            queue.put(('error', str(e)))
+        else:
+            raise e
 
 
 def eval_multi_choice(gold_i, pred_i):
@@ -376,11 +408,32 @@ def eval_freeform_rule(gold_i, pred_i):
     return correct
 
 def eval_freeform_model(args, tasks):
-    return parse_freeform_response_model(args, tasks)
+    if args.use_vllm:
+        q = mp.Queue()
+        proc = mp.Process(target=parse_freeform_response_model, args=(args, tasks, q))
+        proc.start()
+        status, results = q.get()
+        proc.join()
+        if status == 'error':
+            raise ValueError(results)
+    else:
+        results = parse_freeform_response_model(args, tasks)
+    return results
 
-
+def eval_multi_choice_model(args, tasks):
+    if args.use_vllm:
+        q = mp.Queue()
+        proc = mp.Process(target=parse_multi_choice_response_model, args=(args, tasks, q))
+        proc.start()
+        status, results = q.get()
+        proc.join()
+        if status == 'error':
+            raise ValueError(results)
+    else:
+        results = parse_multi_choice_response_model(args, tasks)
+    return results
 
 if __name__ == '__main__':
     response = "Sandy will have more tokens than any sibling by 1/8 million."
     preds = parse_freeform_response_rule(response)
-    print(preds)
+    # print(preds)

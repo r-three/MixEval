@@ -27,7 +27,7 @@ import mix_eval.api.registry
 from mix_eval.utils.common_utils import set_seed
 from mix_eval.utils.metric_utils import (
     parse_multi_choice_response_rule,
-    parse_multi_choice_response_model,
+    eval_multi_choice_model,
     eval_multi_choice,
     eval_freeform_model,
     parse_freeform_response_rule,
@@ -130,6 +130,19 @@ def parse_args():
         "--verbose", 
         action="store_true", 
         help="Print verbose information."
+        )
+    parser.add_argument(
+        "--max_gpu_memory_judge", 
+        type=str, 
+        default=None, 
+        help="The maximum memory per GPU for storing judge weights. "
+        "Set this properly will allocate more memory for activations, "
+        "so you can use longer context lengths or larger batch sizes."
+        )
+    parser.add_argument(
+        "--use_vllm",
+        action="store_true",
+        help="Use VLLM for serving local judge models."
         )
     return parser.parse_args()
 
@@ -580,8 +593,8 @@ def compute_metric_closeended_multichoice_modelparse(args):
                 ans_dict = json.loads(line)
                 ans_dicts.append(ans_dict)
                 
-            ans_dicts_withscore = parse_multi_choice_response_model(args, ans_dicts)
-            
+            ans_dicts_withscore = eval_multi_choice_model(args, ans_dicts)
+
             total = 0
             correct = 0
             results = []
