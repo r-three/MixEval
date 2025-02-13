@@ -158,12 +158,12 @@ def parse_multi_choice_response_model(args, tasks, queue=None):
         assert len(tasks_judged) == len(tasks), \
             "The number of tasks judged is not equal to the number of input tasks."
         
-        if args.use_vllm:
+        if args.use_vllm and queue is not None:
             queue.put(('success', tasks_judged))
         else:
             return tasks_judged
     except Exception as e:
-        if args.use_vllm:
+        if args.use_vllm and queue is not None:
             queue.put(('error', str(e)))
         else:
             raise e
@@ -351,14 +351,14 @@ def parse_freeform_response_model(args, tasks, queue=None):
         
         print(f"Scuccessfully judged {len(tasks_judged)} tasks.")
 
-        if args.use_vllm:
+        if args.use_vllm and queue is not None:
             queue.put(('success', tasks_judged))
         else:
             return tasks_judged
 
     except Exception as e:
         raise e
-        if args.use_vllm:
+        if args.use_vllm and queue is not None:
             queue.put(('error', str(e)))
         else:
             raise e
@@ -409,8 +409,9 @@ def eval_freeform_rule(gold_i, pred_i):
 
 def eval_freeform_model(args, tasks):
     if args.use_vllm:
-        q = mp.Queue()
-        proc = mp.Process(target=parse_freeform_response_model, args=(args, tasks, q))
+        ctx = mp.get_context('spawn')
+        q = ctx.Queue()
+        proc = ctx.Process(target=parse_freeform_response_model, args=(args, tasks, q))
         proc.start()
         status, results = q.get()
         proc.join()
@@ -422,8 +423,9 @@ def eval_freeform_model(args, tasks):
 
 def eval_multi_choice_model(args, tasks):
     if args.use_vllm:
-        q = mp.Queue()
-        proc = mp.Process(target=parse_multi_choice_response_model, args=(args, tasks, q))
+        ctx = mp.get_context('spawn')       
+        q = ctx.Queue()
+        proc = ctx.Process(target=parse_multi_choice_response_model, args=(args, tasks, q))
         proc.start()
         status, results = q.get()
         proc.join()

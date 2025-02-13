@@ -338,7 +338,7 @@ class VLLMJudgeCloseendFreeform:
         """
         Initialize the vLLM model with the local judge model.
         """
-        return LLM(model=self.JUDGE, tokenizer_mode="auto", enable_prefix_caching=True, tensor_parallel_size=4)
+        return LLM(model=self.JUDGE, tokenizer_mode="auto", enable_prefix_caching=True, tensor_parallel_size=4, max_model_len=76144)
 
     def format_prompts(self, inputs):
         """
@@ -375,7 +375,6 @@ class VLLMJudgeCloseendFreeform:
             # top_p=0.9,
             # stop=["</s>"]  # Adjust stop tokens based on the model
         )
-
         # Run inference with vLLM
         results = self.llm.chat(prompt_texts, sampling_params, use_tqdm=False)
         completions = [result.outputs[0].text for result in results]

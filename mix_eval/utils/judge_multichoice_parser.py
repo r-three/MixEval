@@ -339,7 +339,7 @@ class VLLMJudgeCloseendMultichoice:
         """
         Initialize the vLLM model with the specified judge model.
         """
-        return LLM(model=self.JUDGE, tokenizer_mode="auto", enable_prefix_caching=True, tensor_parallel_size=4)
+        return LLM(model=self.JUDGE, tokenizer_mode="auto", enable_prefix_caching=True, tensor_parallel_size=4, max_model_len=76144)
 
     def format_prompts(self, inputs):
         """
@@ -373,11 +373,11 @@ class VLLMJudgeCloseendMultichoice:
         # Define sampling parameters
         sampling_params = SamplingParams(
             max_tokens=self.MAX_NEW_TOKENS,
-            temperature=0.7,
-            top_p=0.9,
-            stop=["</s>"]  # Ensure clean stopping
+            temperature=0,
+            # temperature=0.7,
+            # top_p=0.9,
+            # stop=["</s>"]  # Ensure clean stopping
         )
-
         # Run batch inference with vLLM
         results = self.llm.chat(prompt_texts, sampling_params, use_tqdm=False)
         completions = [result.outputs[0].text for result in results]
